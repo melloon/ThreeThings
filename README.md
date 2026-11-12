@@ -4,6 +4,16 @@ A macOS menu bar app for staying on task. You pick up to three tasks for the day
 
 ![OneThing icon](icon/OneThing-icon.png)
 
+## Screenshots
+
+| Pick a task and start | Friction on a distracting site |
+| --- | --- |
+| <img src="docs/screenshots/menu.png" width="360" alt="Menu bar popover with one task, a play button and an Add a task field"> | <img src="docs/screenshots/friction.png" width="420" alt="Friction screen naming the task and the distracting site, asking why you need it"> |
+
+| Where the time went | Settings |
+| --- | --- |
+| <img src="docs/screenshots/day.png" width="400" alt="Day tab with totals, sessions and a per-app and per-site breakdown"> | <img src="docs/screenshots/settings.png" width="400" alt="Settings tab with session timings and the distracting sites list"> |
+
 ## What it does
 
 - **Start:** choose up to three tasks for today from the menu bar. Pressing play on one starts a focus session (25 minutes by default) and pins the task and countdown in the menu bar.
