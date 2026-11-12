@@ -56,7 +56,7 @@ struct MenuView: View {
                     }
                 }
             } else {
-                Text(store.todayTasks.isEmpty ? "What are today's three things?" : "Pick one and start")
+                Text(store.todayTasks.isEmpty ? "What are today's ThreeThings?" : "Pick one and start")
                     .font(.headline)
             }
 
