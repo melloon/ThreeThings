@@ -10,9 +10,13 @@ A macOS menu bar app for staying on task. You pick up to three tasks for the day
 | --- | --- |
 | <img src="docs/screenshots/menu.png" width="360" alt="Menu bar popover with one task, a play button and an Add a task field"> | <img src="docs/screenshots/friction.png" width="420" alt="Friction screen naming the task and the distracting site, asking why you need it"> |
 
-| Where the time went | Settings |
+| The day at a glance | Where the time went |
 | --- | --- |
-| <img src="docs/screenshots/day.png" width="400" alt="Day tab with totals, sessions and a per-app and per-site breakdown"> | <img src="docs/screenshots/settings.png" width="400" alt="Settings tab with session timings and the distracting sites list"> |
+| <img src="docs/screenshots/day.png" width="400" alt="Day tab with totals for time at the laptop, in focus sessions and on distractions, plus the day's sessions"> | <img src="docs/screenshots/day-distractions.png" width="400" alt="Day tab scrolled down to the per-app and per-site breakdown and the times the friction screen was pushed through, with reasons"> |
+
+| Settings |
+| --- |
+| <img src="docs/screenshots/settings.png" width="400" alt="Settings tab with session timings and the distracting sites list"> |
 
 ## What it does
 
