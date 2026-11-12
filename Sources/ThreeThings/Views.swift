@@ -11,6 +11,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// The app icon's ring and three dots, drawn as a template image so the menu bar tints it for
+/// light and dark appearances.
+let menuBarIcon: NSImage = {
+    let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+        NSColor.black.set()
+        let ring = NSBezierPath(ovalIn: rect.insetBy(dx: 1.25, dy: 1.25))
+        ring.lineWidth = 1.5
+        ring.stroke()
+        for offset in [-3.6, 0, 3.6] {
+            NSBezierPath(ovalIn: NSRect(x: rect.midX + offset - 1.35, y: rect.midY - 1.35,
+                                        width: 2.7, height: 2.7)).fill()
+        }
+        return true
+    }
+    image.isTemplate = true
+    return image
+}()
+
 @main
 struct ThreeThingsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
@@ -23,7 +41,7 @@ struct ThreeThingsApp: App {
             if let s = store.activeSession {
                 Text("◉ \(String(s.title.prefix(24))) · \(clock(store.remaining(s)))")
             } else {
-                Image(systemName: "scope")
+                Image(nsImage: menuBarIcon)
             }
         }
         .menuBarExtraStyle(.window)
