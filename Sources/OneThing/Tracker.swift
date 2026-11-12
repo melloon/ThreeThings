@@ -7,14 +7,16 @@ import SwiftUI
 /// A browser whose current tab can be read and steered through AppleScript.
 struct Browser {
     let bundleID: String
-    /// How this browser's scripting dictionary names the tab in front.
-    let tab: String
+    /// How this browser's scripting dictionary names a window's selected tab.
+    let tabName: String
     let chromium: Bool
 
+    private var tab: String { "\(tabName) of front window" }
+
     static let all = [
-        Browser(bundleID: "com.kagi.kagimacOS", tab: "current tab of front window", chromium: false),
-        Browser(bundleID: "com.google.Chrome", tab: "active tab of front window", chromium: true),
-        Browser(bundleID: "com.brave.Browser", tab: "active tab of front window", chromium: true),
+        Browser(bundleID: "com.kagi.kagimacOS", tabName: "current tab", chromium: false),
+        Browser(bundleID: "com.google.Chrome", tabName: "active tab", chromium: true),
+        Browser(bundleID: "com.brave.Browser", tabName: "active tab", chromium: true),
     ]
 
     static func find(_ bundleID: String) -> Browser? {
@@ -33,9 +35,49 @@ struct Browser {
         run(tell + "get URL of \(tab)")
     }
 
-    func currentHost() -> String? {
-        guard let raw = currentURL(), let host = URL(string: raw)?.host else { return nil }
+    /// The site in the browser window the user is looking at, or nil when something else is in
+    /// front. A browser's scripted "front window" only counts browser windows, so with Settings
+    /// or another auxiliary window in front it still names the browser window behind it. To
+    /// catch that, the scripted window's frame is compared with the app's real frontmost window.
+    func currentHost(pid: pid_t) -> String? {
+        let script = """
+        tell application id "\(bundleID)"
+            set w to front window
+            if not (visible of w) then return ""
+            set b to bounds of w
+            return (URL of \(tabName) of w) & linefeed & (item 1 of b) & "," & (item 2 of b) & "," & (item 3 of b) & "," & (item 4 of b)
+        end tell
+        """
+        guard let lines = run(script)?.split(separator: "\n"), lines.count == 2 else { return nil }
+        let bounds = lines[1].split(separator: ",").compactMap { Int($0) }
+        guard Browser.isFrontWindow(scriptedBounds: bounds, onScreen: Browser.windowFrames(pid: pid)),
+              let host = URL(string: String(lines[0]))?.host else { return nil }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    /// Frames of the app's ordinary on-screen windows, front to back.
+    static func windowFrames(pid: pid_t) -> [CGRect] {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        return list.compactMap { info in
+            guard (info[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let dict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: dict) else { return nil }
+            return frame
+        }
+    }
+
+    /// Whether the scripted window (left, top, right, bottom) is the app's frontmost real window.
+    /// Slivers such as tooltips and helper windows are skipped.
+    static func isFrontWindow(scriptedBounds b: [Int], onScreen frames: [CGRect]) -> Bool {
+        guard b.count == 4,
+              let front = frames.first(where: { $0.width >= 100 && $0.height >= 100 }) else { return false }
+        let scripted = CGRect(x: b[0], y: b[1], width: b[2] - b[0], height: b[3] - b[1])
+        return abs(front.minX - scripted.minX) <= 2 && abs(front.minY - scripted.minY) <= 2
+            && abs(front.width - scripted.width) <= 2 && abs(front.height - scripted.height) <= 2
     }
 
     /// Goes back one page, or closes the tab when there is nothing to go back to.
@@ -105,7 +147,7 @@ final class Tracker {
             guard !fetching else { return }
             fetching = true
             scriptQueue.async {
-                let host = browser.currentHost()
+                let host = browser.currentHost(pid: app.processIdentifier)
                 DispatchQueue.main.async {
                     self.fetching = false
                     self.handle(app: app, bundleID: bundleID, host: host, browser: browser)
@@ -182,8 +224,11 @@ final class Overlay {
     func show<V: View>(_ card: V) {
         close()
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
-        let p = KeyPanel(contentRect: screen.frame, styleMask: [.borderless],
+        // A non-activating panel takes keyboard focus without activating OneThing. Activating
+        // the app would pull its other windows, such as an open Settings window, to the front.
+        let p = KeyPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
                          backing: .buffered, defer: false)
+        p.hidesOnDeactivate = false
         p.isOpaque = false
         p.backgroundColor = .clear
         p.level = .floating
@@ -195,7 +240,6 @@ final class Overlay {
         })
         p.setFrame(screen.frame, display: true)
         panel = p
-        NSApp.activate(ignoringOtherApps: true)
         p.makeKeyAndOrderFront(nil)
     }
 

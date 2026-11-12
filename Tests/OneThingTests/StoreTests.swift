@@ -136,6 +136,27 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
+    // MARK: Browser front window
+
+    func testBrowserWindowInFrontIsRecognised() {
+        let browserWindow = CGRect(x: 0, y: 39, width: 1800, height: 1045)
+        let sliver = CGRect(x: 783, y: 574, width: 20, height: 1)
+        XCTAssertTrue(Browser.isFrontWindow(scriptedBounds: [0, 39, 1800, 1084],
+                                            onScreen: [sliver, browserWindow]))
+    }
+
+    func testSettingsWindowInFrontOfBrowserWindowIsNotTheBrowserWindow() {
+        let settings = CGRect(x: 500, y: 200, width: 780, height: 560)
+        let browserWindow = CGRect(x: 0, y: 39, width: 1800, height: 1045)
+        XCTAssertFalse(Browser.isFrontWindow(scriptedBounds: [0, 39, 1800, 1084],
+                                             onScreen: [settings, browserWindow]))
+    }
+
+    func testNoWindowsOrBadBoundsIsNotTheBrowserWindow() {
+        XCTAssertFalse(Browser.isFrontWindow(scriptedBounds: [0, 39, 1800, 1084], onScreen: []))
+        XCTAssertFalse(Browser.isFrontWindow(scriptedBounds: [], onScreen: [CGRect(x: 0, y: 0, width: 800, height: 600)]))
+    }
+
     // MARK: Formatting
 
     func testClockAndDuration() {
