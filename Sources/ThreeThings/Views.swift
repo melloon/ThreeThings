@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct OneThingApp: App {
+struct ThreeThingsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @ObservedObject var store = Store.shared
 
@@ -28,7 +28,7 @@ struct OneThingApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("OneThing", id: "today") {
+        Window("ThreeThings", id: "today") {
             TodayView().environmentObject(store)
         }
         .defaultSize(width: 620, height: 680)
@@ -112,6 +112,45 @@ struct MenuView: View {
         }
         .padding(14)
         .frame(width: 320)
+        .background(TopEdgeAnchor())
+    }
+}
+
+/// Keeps the menu bar popover's top edge fixed when its content changes height. AppKit resizes
+/// a window from its bottom-left corner, so without this the popover grows up over the menu bar
+/// or shrinks away from it instead of extending downwards.
+struct TopEdgeAnchor: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { AnchorView() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    final class AnchorView: NSView {
+        private var top: CGFloat?
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            let center = NotificationCenter.default
+            observers.forEach(center.removeObserver)
+            observers = []
+            top = nil
+            guard let window else { return }
+
+            // Each time the popover opens, the system has just placed it under the menu bar.
+            observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                                                object: window, queue: .main) { [weak self] _ in
+                self?.top = window.frame.maxY
+            })
+            observers.append(center.addObserver(forName: NSWindow.didResizeNotification,
+                                                object: window, queue: .main) { [weak self] _ in
+                guard let top = self?.top, window.isVisible,
+                      abs(window.frame.maxY - top) > 0.5 else { return }
+                window.setFrameOrigin(NSPoint(x: window.frame.minX, y: top - window.frame.height))
+            })
+        }
+
+        deinit {
+            observers.forEach(NotificationCenter.default.removeObserver)
+        }
     }
 }
 

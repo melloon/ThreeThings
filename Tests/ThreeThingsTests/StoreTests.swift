@@ -1,12 +1,12 @@
 import XCTest
-@testable import OneThing
+@testable import ThreeThings
 
 final class StoreTests: XCTestCase {
     private var fileURL: URL!
 
     override func setUp() {
         fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("onething-test-\(UUID().uuidString).json")
+            .appendingPathComponent("threethings-test-\(UUID().uuidString).json")
     }
 
     override func tearDown() {

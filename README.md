@@ -1,8 +1,8 @@
-# OneThing
+# ThreeThings
 
 A macOS menu bar app for staying on task. You pick up to three tasks for the day, start a timed session on one, and the app adds friction when you drift to a distracting site or app. It also logs where your time goes.
 
-![OneThing icon](icon/OneThing-icon.png)
+![ThreeThings icon](icon/ThreeThings-icon.png)
 
 ## Screenshots
 
@@ -52,9 +52,9 @@ Build and launch it (this quits any running copy first):
 ./build.sh run
 ```
 
-The script produces `OneThing.app` in this folder. Look for the target symbol in the menu bar; the app has no Dock icon.
+The script produces `ThreeThings.app` in this folder. Look for the target symbol in the menu bar; the app has no Dock icon.
 
-The app does not start at login. Add `OneThing.app` under System Settings > General > Login Items if you want that.
+The app does not start at login. Add `ThreeThings.app` under System Settings > General > Login Items if you want that.
 
 ## Tests
 
@@ -66,7 +66,7 @@ The tests cover the data layer: the blocklist, the three-task limit, the session
 
 ## Permissions
 
-The first time a supported browser is in front, macOS asks whether OneThing may control it. The app uses this to read the address of the current tab and, when you press "Back to work", to go back a page or close the tab. Without it, that browser is tracked as one app with no site friction.
+The first time a supported browser is in front, macOS asks whether ThreeThings may control it. The app uses this to read the address of the current tab and, when you press "Back to work", to go back a page or close the tab. Without it, that browser is tracked as one app with no site friction.
 
 The app is signed locally, so macOS may ask again after each rebuild.
 
@@ -86,7 +86,7 @@ A site entry covers its subdomains, so `youtube.com` also matches `m.youtube.com
 
 ## Your data
 
-Everything is stored on this Mac in `~/Library/Application Support/OneThing/data.json`, readable only by your account. The app makes no network connections.
+Everything is stored on this Mac in `~/Library/Application Support/ThreeThings/data.json`, readable only by your account. The app makes no network connections.
 
 The file holds your tasks, sessions, settings, the reasons you typed on the friction screen, and the activity log. The log records app names and site names only, not full addresses or page titles, and entries older than 60 days are dropped at launch.
 
@@ -96,27 +96,27 @@ To reset the app, quit it and delete that file.
 
 | Path | Contents |
 | --- | --- |
-| `Sources/OneThing/Core.swift` | Data models, saving and loading, tasks, sessions, blocklist |
-| `Sources/OneThing/Tracker.swift` | Activity tracking, browser scripting, the friction and check-in screens |
-| `Sources/OneThing/Views.swift` | Menu bar popover, Day tab, Settings tab |
-| `Tests/OneThingTests/StoreTests.swift` | Unit tests for the data layer |
+| `Sources/ThreeThings/Core.swift` | Data models, saving and loading, tasks, sessions, blocklist |
+| `Sources/ThreeThings/Tracker.swift` | Activity tracking, browser scripting, the friction and check-in screens |
+| `Sources/ThreeThings/Views.swift` | Menu bar popover, Day tab, Settings tab |
+| `Tests/ThreeThingsTests/StoreTests.swift` | Unit tests for the data layer |
 | `icon/make_icon.swift` | Draws the app icon; `icon/AppIcon.icns` is the built result |
 | `build.sh` | Builds, bundles and signs the app |
-| `Info.plist`, `OneThing.entitlements` | Bundle settings and the browser-scripting entitlement |
+| `Info.plist`, `ThreeThings.entitlements` | Bundle settings and the browser-scripting entitlement |
 
 To support another Chromium browser, add one line to `Browser.all` in `Tracker.swift` with its bundle identifier.
 
 To redraw the icon after editing `make_icon.swift`:
 
 ```bash
-swift icon/make_icon.swift icon/OneThing-icon.png
+swift icon/make_icon.swift icon/ThreeThings-icon.png
 ```
 
 `AppIcon.icns` then needs regenerating from that PNG with `sips` and `iconutil`.
 
 ## Known limits
 
-- Friction is a nudge, not a lock: quitting OneThing removes it.
+- Friction is a nudge, not a lock: quitting ThreeThings removes it.
 - The friction screen covers the main display only.
 - The tests cover the data layer only. The friction screen, the check-in and the Chrome and Brave paths have had little hands-on testing.
 - The app is not sandboxed and is signed ad hoc, so there is no downloadable build: build it from source on the Mac you want to use it on.

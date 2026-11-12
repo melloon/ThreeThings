@@ -1,4 +1,4 @@
-// Draws the OneThing app icon. Usage: swift icon/make_icon.swift <output.png>
+// Draws the ThreeThings app icon. Usage: swift icon/make_icon.swift <output.png>
 import AppKit
 
 let size = 1024
@@ -37,33 +37,45 @@ let background = CGGradient(colorsSpace: space, colors: [rgb(0x3A3F9E), rgb(0x14
                             locations: [0, 1])!
 ctx.drawLinearGradient(background, start: CGPoint(x: 512, y: tile.maxY),
                        end: CGPoint(x: 512, y: tile.minY), options: [])
-// Soft glow behind the dot
-let glow = CGGradient(colorsSpace: space, colors: [rgb(0xFF8A4C, 0.35), rgb(0xFF8A4C, 0)] as CFArray,
+// Soft glow behind the active dot
+let spacing: CGFloat = 138
+let active = CGPoint(x: centre.x - spacing, y: centre.y)
+let glow = CGGradient(colorsSpace: space, colors: [rgb(0xFF8A4C, 0.38), rgb(0xFF8A4C, 0)] as CFArray,
                       locations: [0, 1])!
-ctx.drawRadialGradient(glow, startCenter: centre, startRadius: 0, endCenter: centre, endRadius: 330,
+ctx.drawRadialGradient(glow, startCenter: active, startRadius: 0, endCenter: active, endRadius: 300,
                        options: [])
 ctx.restoreGState()
 
 // Faint outer ring, bold inner ring
-ctx.setLineCap(.round)
 ctx.setStrokeColor(rgb(0xFFFFFF, 0.16))
-ctx.setLineWidth(26)
-ctx.addArc(center: centre, radius: 318, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+ctx.setLineWidth(22)
+ctx.addArc(center: centre, radius: 332, startAngle: 0, endAngle: .pi * 2, clockwise: false)
 ctx.strokePath()
 
 ctx.setStrokeColor(rgb(0xFFFFFF, 0.96))
-ctx.setLineWidth(58)
-ctx.addArc(center: centre, radius: 212, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+ctx.setLineWidth(50)
+ctx.addArc(center: centre, radius: 252, startAngle: 0, endAngle: .pi * 2, clockwise: false)
 ctx.strokePath()
 
-// The one thing
-ctx.saveGState()
-ctx.addEllipse(in: CGRect(x: centre.x - 92, y: centre.y - 92, width: 184, height: 184))
-ctx.clip()
-let dot = CGGradient(colorsSpace: space, colors: [rgb(0xFFA15C), rgb(0xFF6B3D)] as CFArray,
-                     locations: [0, 1])!
-ctx.drawLinearGradient(dot, start: CGPoint(x: 512, y: 604), end: CGPoint(x: 512, y: 420), options: [])
-ctx.restoreGState()
+// Three things: the one in progress is orange, the two still waiting are white
+let radius: CGFloat = 54
+for index in 0..<3 {
+    let x = centre.x + CGFloat(index - 1) * spacing
+    let circle = CGRect(x: x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2)
+    if index == 0 {
+        ctx.saveGState()
+        ctx.addEllipse(in: circle)
+        ctx.clip()
+        let dot = CGGradient(colorsSpace: space, colors: [rgb(0xFFA15C), rgb(0xFF6B3D)] as CFArray,
+                             locations: [0, 1])!
+        ctx.drawLinearGradient(dot, start: CGPoint(x: x, y: circle.maxY),
+                               end: CGPoint(x: x, y: circle.minY), options: [])
+        ctx.restoreGState()
+    } else {
+        ctx.setFillColor(rgb(0xFFFFFF, 0.94))
+        ctx.fillEllipse(in: circle)
+    }
+}
 
 let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "icon.png"
 try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out))

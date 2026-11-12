@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "OneThing",
+    name: "ThreeThings",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "OneThing", path: "Sources/OneThing"),
-        .testTarget(name: "OneThingTests", dependencies: ["OneThing"], path: "Tests/OneThingTests"),
+        .executableTarget(name: "ThreeThings", path: "Sources/ThreeThings"),
+        .testTarget(name: "ThreeThingsTests", dependencies: ["ThreeThings"], path: "Tests/ThreeThingsTests"),
     ]
 )

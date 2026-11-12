@@ -102,7 +102,7 @@ final class Store: ObservableObject {
 
     static let defaultFileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("OneThing", isDirectory: true)
+            .appendingPathComponent("ThreeThings", isDirectory: true)
         // The log shows which apps and sites were used, so only this account may read it.
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])

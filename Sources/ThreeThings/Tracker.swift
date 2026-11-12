@@ -105,7 +105,7 @@ struct Browser {
 final class Tracker {
     static let shared = Tracker()
     private let store = Store.shared
-    private let scriptQueue = DispatchQueue(label: "onething.orion")
+    private let scriptQueue = DispatchQueue(label: "threethings.orion")
     private var timer: Timer?
     private var ticks = 0
     private var fetching = false
@@ -224,7 +224,7 @@ final class Overlay {
     func show<V: View>(_ card: V) {
         close()
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
-        // A non-activating panel takes keyboard focus without activating OneThing. Activating
+        // A non-activating panel takes keyboard focus without activating ThreeThings. Activating
         // the app would pull its other windows, such as an open Settings window, to the front.
         let p = KeyPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
                          backing: .buffered, defer: false)
