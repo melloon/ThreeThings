@@ -34,6 +34,7 @@ struct LegendItem: View {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Tracker.shared.start()
+        MenuBarController.shared.install()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -62,24 +63,11 @@ let menuBarIcon: NSImage = {
 @main
 struct ThreeThingsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
-    @ObservedObject var store = Store.shared
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuView().environmentObject(store)
-        } label: {
-            if let s = store.activeSession {
-                Text("◉ \(String(s.title.prefix(24))) · \(clock(store.remaining(s)))")
-            } else {
-                Image(nsImage: menuBarIcon)
-            }
-        }
-        .menuBarExtraStyle(.window)
-
-        Window("ThreeThings", id: "today") {
-            TodayView().environmentObject(store)
-        }
-        .defaultSize(width: 620, height: 680)
+        // The menu bar item, its panel and the main window are AppKit objects owned by
+        // MenuBarController. SwiftUI still needs a scene, so this one is never inserted.
+        MenuBarExtra("ThreeThings", isInserted: .constant(false)) { EmptyView() }
     }
 }
 
@@ -87,20 +75,40 @@ struct ThreeThingsApp: App {
 
 struct MenuView: View {
     @EnvironmentObject var store: Store
-    @Environment(\.openWindow) private var openWindow
     @State private var newTask = ""
+    @State private var editingID: UUID?
+    @State private var editText = ""
+    @FocusState private var editFocused: Bool
+
+    private func beginRename(_ task: TaskItem) {
+        editText = task.title
+        editingID = task.id
+        DispatchQueue.main.async { editFocused = true }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let s = store.activeSession {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Focusing on").font(.caption).foregroundStyle(.secondary)
+                    Text(s.isPaused ? "Paused" : "Focusing on").font(.caption).foregroundStyle(.secondary)
                     Text(s.title).font(.headline)
                     HStack {
                         Text(clock(store.remaining(s)))
                             .font(.system(size: 28, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(s.isPaused ? .secondary : .primary)
                         Spacer()
+                        Button(s.isPaused ? "Resume" : "Pause") { store.togglePause() }
                         Button("Finish") { Tracker.shared.finishSession() }
+                    }
+                }
+            } else if let end = store.breakEnds {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("On a break").font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Text(clock(end.timeIntervalSince(store.now)))
+                            .font(.system(size: 28, weight: .semibold).monospacedDigit())
+                        Spacer()
+                        Button("End break") { store.breakEnds = nil }
                     }
                 }
             } else {
@@ -117,10 +125,25 @@ struct MenuView: View {
                     }
                     .buttonStyle(.plain)
                     .help(task.done ? "Mark as not done" : "Mark as done")
-                    Text(task.title)
-                        .strikethrough(task.done)
-                        .foregroundStyle(task.done ? .secondary : .primary)
-                        .lineLimit(2)
+                    if editingID == task.id {
+                        TextField("Task name", text: $editText)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($editFocused)
+                            .onSubmit {
+                                store.renameTask(task.id, to: editText)
+                                editingID = nil
+                            }
+                            .onExitCommand { editingID = nil }
+                    } else {
+                        Text(task.title)
+                            .strikethrough(task.done)
+                            .foregroundStyle(task.done ? .secondary : .primary)
+                            .lineLimit(2)
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) { beginRename(task) }
+                            .contextMenu { Button("Rename") { beginRename(task) } }
+                            .help("Double-click to rename")
+                    }
                     Spacer()
                     if store.activeSession == nil && !task.done {
                         Button { store.startSession(task) } label: {
@@ -150,55 +173,13 @@ struct MenuView: View {
             Divider()
 
             HStack {
-                Button("Today and settings") {
-                    openWindow(id: "today")
-                    NSApp.activate(ignoringOtherApps: true)
-                }
+                Button("Today and settings") { MenuBarController.shared.openMainWindow() }
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }
             }
         }
         .padding(14)
         .frame(width: 320)
-        .background(TopEdgeAnchor())
-    }
-}
-
-/// Keeps the menu bar popover's top edge fixed when its content changes height. AppKit resizes
-/// a window from its bottom-left corner, so without this the popover grows up over the menu bar
-/// or shrinks away from it instead of extending downwards.
-struct TopEdgeAnchor: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { AnchorView() }
-    func updateNSView(_ view: NSView, context: Context) {}
-
-    final class AnchorView: NSView {
-        private var top: CGFloat?
-        private var observers: [NSObjectProtocol] = []
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            let center = NotificationCenter.default
-            observers.forEach(center.removeObserver)
-            observers = []
-            top = nil
-            guard let window else { return }
-
-            // Each time the popover opens, the system has just placed it under the menu bar.
-            observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification,
-                                                object: window, queue: .main) { [weak self] _ in
-                self?.top = window.frame.maxY
-            })
-            observers.append(center.addObserver(forName: NSWindow.didResizeNotification,
-                                                object: window, queue: .main) { [weak self] _ in
-                guard let top = self?.top, window.isVisible,
-                      abs(window.frame.maxY - top) > 0.5 else { return }
-                window.setFrameOrigin(NSPoint(x: window.frame.minX, y: top - window.frame.height))
-            })
-        }
-
-        deinit {
-            observers.forEach(NotificationCenter.default.removeObserver)
-        }
     }
 }
 
@@ -283,7 +264,7 @@ struct DayView: View {
                             .frame(width: 70, alignment: .leading)
                         Text(s.title).lineLimit(1)
                         Spacer()
-                        Text(duration((s.end ?? store.now).timeIntervalSince(s.start)))
+                        Text(duration(s.activeSeconds(now: store.now)))
                             .foregroundStyle(.secondary)
                         Text(outcomeLabel(s)).frame(width: 110, alignment: .trailing)
                     }
@@ -337,7 +318,7 @@ struct DayView: View {
     }
 
     private func outcomeLabel(_ s: Session) -> String {
-        if s.end == nil { return "In progress" }
+        if s.end == nil { return s.isPaused ? "Paused" : "In progress" }
         switch s.outcome {
         case "done": return "Done"
         case "partial": return "Made progress"
@@ -525,6 +506,10 @@ struct SettingsView: View {
                         value: $store.data.settings.frictionSeconds, in: 5...120, step: 5)
                 Stepper("Pass after pushing through: \(store.data.settings.passMinutes) min",
                         value: $store.data.settings.passMinutes, in: 1...30)
+                Stepper(store.data.settings.breakMinutes > 0
+                        ? "Break after a session: \(store.data.settings.breakMinutes) min"
+                        : "No break after sessions",
+                        value: $store.data.settings.breakMinutes, in: 0...30, step: 5)
 
                 Text("Check-ins").font(.headline)
                 Stepper(store.data.settings.checkinMinutes > 0
@@ -578,6 +563,7 @@ struct SettingsView: View {
             .onChange(of: store.data.settings.passMinutes) { store.save() }
             .onChange(of: store.data.settings.checkinMinutes) { store.save() }
             .onChange(of: store.data.settings.checkinSound) { store.save() }
+            .onChange(of: store.data.settings.breakMinutes) { store.save() }
         }
     }
 

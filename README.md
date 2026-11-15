@@ -6,23 +6,31 @@ A macOS menu bar app for staying on task. You pick up to three tasks for the day
 
 ## Screenshots
 
-| Pick a task and start | Friction on a distracting site |
+| Pick a task and start | During a session | Paused |
+| --- | --- | --- |
+| <img src="docs/screenshots/menu.png" width="270" alt="Menu bar popover with three tasks, one ticked off, and play buttons on the other two"> | <img src="docs/screenshots/menu-running.png" width="270" alt="Menu bar popover during a session, with the task name, a countdown and Pause and Finish buttons"> | <img src="docs/screenshots/menu-paused.png" width="270" alt="Menu bar popover with the session paused, the countdown dimmed and a Resume button"> |
+
+In the menu bar while a session runs:
+
+<img src="docs/screenshots/menubar.png" width="204" alt="Menu bar showing the task name and the time left in the session">
+
+| Friction on a distracting site | When the session ends |
 | --- | --- |
-| <img src="docs/screenshots/menu.png" width="360" alt="Menu bar popover with one task, a play button and an Add a task field"> | <img src="docs/screenshots/friction.png" width="420" alt="Friction screen naming the task and the distracting site, asking why you need it"> |
+| <img src="docs/screenshots/friction.png" width="420" alt="Friction screen naming the task and the distracting site, asking why you need it, with a countdown before you can continue"> | <img src="docs/screenshots/session-end.png" width="420" alt="End-of-session screen asking whether you did the task, with Not really, Made progress and Done buttons and a note that a break starts next"> |
 
 | The day at a glance | Where the time went |
 | --- | --- |
-| <img src="docs/screenshots/day.png" width="400" alt="Day tab with totals for time at the laptop, in focus sessions and on distractions, plus the day's sessions"> | <img src="docs/screenshots/day-distractions.png" width="400" alt="Day tab scrolled down to the per-app and per-site breakdown and the times the friction screen was pushed through, with reasons"> |
+| <img src="docs/screenshots/day.png" width="400" alt="Day tab with totals for time at the laptop, in focus sessions and on distractions, the day's sessions, and the start of the per-app breakdown"> | <img src="docs/screenshots/day-distractions.png" width="400" alt="Day tab scrolled down to the per-app and per-site breakdown, with distracting sites in orange, and the times the friction screen was pushed through, with reasons"> |
 
-| Settings |
-| --- |
-| <img src="docs/screenshots/settings.png" width="400" alt="Settings tab with session timings and the distracting sites list"> |
+| The last seven days | Settings |
+| --- | --- |
+| <img src="docs/screenshots/week.png" width="400" alt="Week tab with totals, a bar chart of focus session time against distraction time for each of the last seven days, and a table of the same figures"> | <img src="docs/screenshots/settings.png" width="400" alt="Settings tab with open at login, session, break and check-in settings, and the distracting sites list"> |
 
 ## What it does
 
-- **Start:** choose up to three tasks for today from the menu bar. Pressing play on one starts a focus session (25 minutes by default) and pins the task and countdown in the menu bar. Tasks you didn't finish carry over to the next day you open the app.
-- **During a session:** opening a site or app on your distraction list dims the screen and shows the task you committed to. You can go back to work, or wait out a timer (20 seconds by default) and type a reason to continue for a few minutes. One minute before that pass runs out, a small reminder appears. Every ten minutes by default, a "still on task?" notification checks in; it needs no answer and leaves on its own.
-- **After:** when the timer ends, or you press Finish, the app asks whether you did it. "Done" ticks the task off.
+- **Start:** choose up to three tasks for today from the menu bar. Pressing play on one starts a focus session (25 minutes by default) and pins the task and countdown in the menu bar. Tasks you didn't finish carry over to the next day you open the app. Double-click a task to rename it.
+- **During a session:** opening a site or app on your distraction list dims the screen and shows the task you committed to. You can go back to work, or wait out a timer (20 seconds by default) and type a reason to continue for a few minutes. One minute before that pass runs out, a small reminder appears. Every ten minutes by default, a "still on task?" notification checks in; it needs no answer and leaves on its own. Pause stops the clock, and friction, until you resume.
+- **After:** when the timer ends, or you press Finish, the app asks whether you did it. "Done" ticks the task off. A short break (5 minutes by default) then counts down in the menu bar, with a notification when it ends; starting another session ends the break early.
 - **All day:** the app records which app is in front and, in supported browsers, which site. The Day tab shows time at the laptop, time in sessions, time on distractions, a per-app and per-site breakdown, and every time you pushed through the friction screen along with the reason you gave.
 - **Over the week:** the Week tab charts focus session time against distraction time for the last seven days, with totals and the number of sessions you marked done. The arrows step back seven days at a time.
 
@@ -71,7 +79,7 @@ To start it at login, turn on "Open ThreeThings at login" in the Settings tab.
 swift test
 ```
 
-The tests cover the data layer: the blocklist, the three-task limit, task carry-over, the session lifecycle, activity logging, the weekly totals, check-in timing, and saving and loading, including files saved by older versions. They use a temporary file and never touch your real data.
+The tests cover the data layer: the blocklist, the three-task limit, task carry-over, the session lifecycle, activity logging, the weekly totals, check-in timing, pausing, breaks, renaming, and saving and loading, including files saved by older versions. A second set opens the real menu panel, fully transparent, and checks that it resizes with its content while its top edge stays put. All of them use a temporary file and never touch your real data.
 
 ## Permissions
 
@@ -91,6 +99,7 @@ Open "Today and settings" from the menu bar, then the Settings tab:
 | Session length | 25 minutes |
 | Wait before you can continue | 20 seconds |
 | Pass after pushing through | 5 minutes |
+| Break after a session | 5 minutes (0 turns it off) |
 | Check-in during a session | every 10 minutes (0 turns it off) |
 | Play a sound with check-ins | off |
 | Distracting sites | youtube.com, reddit.com, x.com, twitter.com, instagram.com, facebook.com, tiktok.com, news.ycombinator.com, netflix.com |
@@ -112,8 +121,10 @@ To reset the app, quit it and delete that file.
 | --- | --- |
 | `Sources/ThreeThings/Core.swift` | Data models, saving and loading, tasks, sessions, blocklist |
 | `Sources/ThreeThings/Tracker.swift` | Activity tracking, browser scripting, check-in notifications, the friction and end-of-session screens |
-| `Sources/ThreeThings/Views.swift` | Menu bar popover, Day, Week and Settings tabs |
+| `Sources/ThreeThings/Views.swift` | The menu's contents, and the Day, Week and Settings tabs |
+| `Sources/ThreeThings/MenuBar.swift` | The menu bar item, its drop-down panel and the main window |
 | `Tests/ThreeThingsTests/StoreTests.swift` | Unit tests for the data layer |
+| `Tests/ThreeThingsTests/MenuPanelTests.swift` | Tests that the menu panel follows its content and stays under the menu bar |
 | `icon/make_icon.swift` | Draws the app icon; `icon/AppIcon.icns` is the built result |
 | `build.sh` | Builds, bundles and signs the app |
 | `Info.plist`, `ThreeThings.entitlements` | Bundle settings and the browser-scripting entitlement |
@@ -131,7 +142,8 @@ swift icon/make_icon.swift icon/ThreeThings-icon.png
 ## Known limits
 
 - Friction is a nudge, not a lock: quitting ThreeThings removes it.
-- The friction screen covers the main display only.
+- The friction screen dims every display, but that has only been run on a single display.
+- Pausing is manual. The session clock keeps running if you walk away without pausing.
 - The tests cover the data layer only. The friction screen and the check-in have had only hands-on testing, and browsers other than Orion have had little or none.
 - The app is not sandboxed and is signed ad hoc, so there is no downloadable build: build it from source on the Mac you want to use it on.
 

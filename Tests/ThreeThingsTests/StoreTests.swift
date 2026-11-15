@@ -80,6 +80,76 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(store.todayTasks.first).done)
     }
 
+    func testPausingFreezesTheSessionClock() throws {
+        let store = makeStore()
+        store.addTask("Task")
+        store.startSession(try XCTUnwrap(store.todayTasks.first))
+        let start = Date().addingTimeInterval(-600)
+        store.data.sessions[0].start = start
+        store.now = Date()
+        XCTAssertEqual(store.remaining(try XCTUnwrap(store.activeSession)), 15 * 60, accuracy: 2)
+
+        store.togglePause()
+        store.data.sessions[0].pausedAt = start.addingTimeInterval(480)
+        let paused = try XCTUnwrap(store.activeSession)
+        XCTAssertTrue(paused.isPaused)
+        XCTAssertNil(store.runningSession, "a paused session does not count as running")
+        XCTAssertEqual(store.remaining(paused), 17 * 60, accuracy: 0.01)
+        store.now = Date().addingTimeInterval(3600)
+        XCTAssertEqual(store.remaining(paused), 17 * 60, accuracy: 0.01, "the clock does not move while paused")
+
+        store.record(app: "Notes", bundleID: "notes", host: nil, distracting: false)
+        XCTAssertNil(store.data.segments.last?.sessionID, "paused time is not focus time")
+
+        store.now = Date()
+        store.togglePause()
+        let resumed = try XCTUnwrap(store.runningSession)
+        XCTAssertFalse(resumed.isPaused)
+        XCTAssertEqual(store.remaining(resumed), 17 * 60, accuracy: 2)
+
+        let ended = try XCTUnwrap(store.endActiveSession())
+        XCTAssertEqual(ended.activeSeconds(now: Date()), 480, accuracy: 2, "the pause is left out of the length")
+    }
+
+    func testEndingAPausedSessionFoldsInThePause() throws {
+        let store = makeStore()
+        store.addTask("Task")
+        store.startSession(try XCTUnwrap(store.todayTasks.first))
+        store.data.sessions[0].start = Date().addingTimeInterval(-900)
+        store.togglePause()
+        store.data.sessions[0].pausedAt = Date().addingTimeInterval(-300)
+        let ended = try XCTUnwrap(store.endActiveSession())
+        XCTAssertNil(ended.pausedAt)
+        XCTAssertEqual(ended.activeSeconds(now: Date()), 600, accuracy: 2)
+    }
+
+    func testBreakStartsAndEndsWithTheNextSession() throws {
+        let store = makeStore()
+        store.addTask("Task")
+        store.startBreak()
+        let ends = try XCTUnwrap(store.breakEnds)
+        XCTAssertEqual(ends.timeIntervalSinceNow, Double(store.data.settings.breakMinutes) * 60, accuracy: 2)
+
+        store.startSession(try XCTUnwrap(store.todayTasks.first))
+        XCTAssertNil(store.breakEnds, "starting a session ends the break")
+
+        store.data.settings.breakMinutes = 0
+        store.startBreak()
+        XCTAssertNil(store.breakEnds, "0 turns breaks off")
+    }
+
+    func testRenamingATaskRenamesItsSessions() throws {
+        let store = makeStore()
+        store.addTask("Old name")
+        let task = try XCTUnwrap(store.todayTasks.first)
+        store.startSession(task)
+        store.renameTask(task.id, to: "  New name ")
+        XCTAssertEqual(store.todayTasks.first?.title, "New name")
+        XCTAssertEqual(store.activeSession?.title, "New name")
+        store.renameTask(task.id, to: "   ")
+        XCTAssertEqual(store.todayTasks.first?.title, "New name", "an empty name is ignored")
+    }
+
     func testUnfinishedTasksCarryOverToToday() {
         let store = makeStore()
         let yesterday = dayKey(Date().addingTimeInterval(-86400))
@@ -187,7 +257,9 @@ final class StoreTests: XCTestCase {
         // A file from before check-ins were added: no checkinMinutes or checkinSound.
         let old = """
         {"tasks":[{"id":"\(UUID().uuidString)","title":"Kept","day":"\(dayKey(Date()))","done":false}],
-         "sessions":[],"segments":[],"overrides":[],
+         "sessions":[{"id":"\(UUID().uuidString)","taskID":"\(UUID().uuidString)","title":"Earlier",
+                      "start":800000000,"end":800001500,"plannedMinutes":25,"outcome":"done"}],
+         "segments":[],"overrides":[],
          "settings":{"blockedHosts":["example.com"],"blockedApps":[],"sessionMinutes":45,
                      "frictionSeconds":20,"passMinutes":5}}
         """
@@ -198,6 +270,8 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.data.settings.sessionMinutes, 45)
         XCTAssertEqual(store.data.settings.blockedHosts, ["example.com"])
         XCTAssertEqual(store.data.settings.checkinMinutes, Settings().checkinMinutes)
+        XCTAssertEqual(store.data.sessions.first?.activeSeconds(now: Date()), 1500,
+                       "a session saved before pausing existed keeps its length")
     }
 
     func testCheckinsDue() {
@@ -207,14 +281,30 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(Tracker.checkinsDue(elapsed: 24 * 60, everyMinutes: 0), 0, "0 turns check-ins off")
     }
 
-    func testSessionLeftOpenIsClosedOnLoad() throws {
+    func testExpiredSessionLeftOpenIsClosedOnLoad() throws {
         let store = makeStore()
         store.addTask("Task")
         store.startSession(try XCTUnwrap(store.todayTasks.first))
+        let start = Date().addingTimeInterval(-2 * 3600)
+        store.data.sessions[0].start = start
+        store.save()
 
         let reloaded = makeStore()
         XCTAssertNil(reloaded.activeSession)
-        XCTAssertNotNil(reloaded.data.sessions.first?.end)
+        let end = try XCTUnwrap(reloaded.data.sessions.first?.end)
+        XCTAssertEqual(end.timeIntervalSince(start), 25 * 60, accuracy: 1, "closed at its planned end")
+    }
+
+    func testSessionWithTimeLeftCarriesOnAfterRelaunch() throws {
+        let store = makeStore()
+        store.addTask("Task")
+        store.startSession(try XCTUnwrap(store.todayTasks.first))
+        store.data.sessions[0].start = Date().addingTimeInterval(-300)
+        store.save()
+
+        let reloaded = makeStore()
+        let session = try XCTUnwrap(reloaded.runningSession)
+        XCTAssertEqual(reloaded.remaining(session), 20 * 60, accuracy: 2)
     }
 
     func testDataFileIsPrivateToTheUser() throws {

@@ -141,13 +141,13 @@ final class Tracker {
 
     private func checkIn(_ session: Session) {
         let settings = store.data.settings
-        guard settings.checkinMinutes > 0 else { return }
         if checkinSession != session.id {
             checkinSession = session.id
             checkinsSent = 0
             Checkins.shared.prepare()
         }
-        let due = Tracker.checkinsDue(elapsed: store.now.timeIntervalSince(session.start),
+        guard settings.checkinMinutes > 0 else { return }
+        let due = Tracker.checkinsDue(elapsed: session.activeSeconds(now: store.now),
                                       everyMinutes: settings.checkinMinutes)
         guard due > checkinsSent else { return }
         checkinsSent = due
@@ -167,8 +167,14 @@ final class Tracker {
 
     private func tick() {
         store.now = Date()
-        if let s = store.activeSession, store.remaining(s) <= 0 { finishSession() }
-        if let s = store.activeSession { checkIn(s) }
+        if let s = store.runningSession, store.remaining(s) <= 0 { finishSession() }
+        if let s = store.runningSession { checkIn(s) }
+        if let end = store.breakEnds, store.now >= end {
+            store.breakEnds = nil
+            Checkins.shared.notify(id: "break", title: "Break's over",
+                                   body: "Pick your next task when you're ready.",
+                                   sound: store.data.settings.checkinSound)
+        }
 
         ticks += 1
         if ticks % 30 == 0 {
@@ -217,7 +223,7 @@ final class Tracker {
 
         store.record(app: name, bundleID: bundleID, host: host, distracting: key != nil)
 
-        guard let key, let session = store.activeSession else { return }
+        guard let key, let session = store.runningSession else { return }
         if let until = passes[key], until > Date() {
             if until.timeIntervalSinceNow < 60, !nudged.contains(key) {
                 nudged.insert(key)
@@ -269,7 +275,11 @@ final class Checkins: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func post(task: String, remaining: TimeInterval, sound: Bool) {
-        let title = "Still on “\(task)”?"
+        notify(id: Checkins.identifier, title: "Still on “\(task)”?",
+               body: "\(Int((remaining / 60).rounded())) min left in this session.", sound: sound)
+    }
+
+    func notify(id: String, title: String, body: String, sound: Bool) {
         center.getNotificationSettings { settings in
             guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
                 DispatchQueue.main.async { HUD.shared.show(title) }
@@ -277,10 +287,10 @@ final class Checkins: NSObject, UNUserNotificationCenterDelegate {
             }
             let content = UNMutableNotificationContent()
             content.title = title
-            content.body = "\(Int((remaining / 60).rounded())) min left in this session."
+            content.body = body
             content.sound = sound ? .default : nil
-            // Reusing one identifier replaces the previous check-in, so they never pile up.
-            self.center.add(UNNotificationRequest(identifier: Checkins.identifier, content: content, trigger: nil))
+            // Reusing an identifier replaces the previous notification, so they never pile up.
+            self.center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
         }
     }
 
@@ -303,12 +313,28 @@ final class KeyPanel: NSPanel {
 
 final class Overlay {
     static let shared = Overlay()
-    private var panel: NSPanel?
-    var isVisible: Bool { panel != nil }
+    private var panels: [NSPanel] = []
+    var isVisible: Bool { !panels.isEmpty }
 
+    /// Dims every display and puts the card on the one the user is working on.
     func show<V: View>(_ card: V) {
         close()
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        guard let main = NSScreen.main ?? NSScreen.screens.first else { return }
+        let dim = Color.black.opacity(0.78).ignoresSafeArea()
+        for screen in NSScreen.screens where screen.frame != main.frame {
+            let p = makePanel(on: screen, content: dim)
+            p.orderFrontRegardless()
+            panels.append(p)
+        }
+        let p = makePanel(on: main, content: ZStack {
+            dim
+            card
+        })
+        panels.append(p)
+        p.makeKeyAndOrderFront(nil)
+    }
+
+    private func makePanel<V: View>(on screen: NSScreen, content: V) -> NSPanel {
         // A non-activating panel takes keyboard focus without activating ThreeThings. Activating
         // the app would pull its other windows, such as an open Settings window, to the front.
         let p = KeyPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -319,23 +345,21 @@ final class Overlay {
         p.level = .floating
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.isReleasedWhenClosed = false
-        p.contentView = NSHostingView(rootView: ZStack {
-            Color.black.opacity(0.78).ignoresSafeArea()
-            card
-        })
+        p.contentView = NSHostingView(rootView: content)
         p.setFrame(screen.frame, display: true)
-        panel = p
-        p.makeKeyAndOrderFront(nil)
+        return p
     }
 
     func close() {
-        panel?.close()
-        panel = nil
+        panels.forEach { $0.close() }
+        panels = []
     }
 
     func showCheckin(_ session: Session) {
-        show(CheckinView(title: session.title) { outcome in
-            Store.shared.setOutcome(session.id, outcome)
+        let store = Store.shared
+        show(CheckinView(title: session.title, breakMinutes: store.data.settings.breakMinutes) { outcome in
+            store.setOutcome(session.id, outcome)
+            store.startBreak()
             self.close()
         })
     }
@@ -434,6 +458,7 @@ struct FrictionView: View {
 
 struct CheckinView: View {
     let title: String
+    let breakMinutes: Int
     let onAnswer: (String) -> Void
 
     var body: some View {
@@ -441,6 +466,10 @@ struct CheckinView: View {
             Text("Session over").font(.subheadline).foregroundStyle(.secondary)
             Text(title).font(.title.bold())
             Text("Did you do it?")
+            if breakMinutes > 0 {
+                Text("A \(breakMinutes) minute break starts when you answer.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             HStack {
                 Button("Not really") { onAnswer("no") }
                 Button("Made progress") { onAnswer("partial") }

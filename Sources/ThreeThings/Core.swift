@@ -19,6 +19,17 @@ struct Session: Codable, Identifiable {
     var plannedMinutes: Int
     /// "done", "partial" or "no"; nil until the check-in is answered.
     var outcome: String?
+    /// Set while the session is paused.
+    var pausedAt: Date?
+    /// Time spent paused so far, not counting a pause still in progress.
+    var pausedTotal: TimeInterval?
+
+    var isPaused: Bool { end == nil && pausedAt != nil }
+
+    /// Time actually spent in the session, leaving out pauses.
+    func activeSeconds(now: Date) -> TimeInterval {
+        (end ?? pausedAt ?? now).timeIntervalSince(start) - (pausedTotal ?? 0)
+    }
 }
 
 /// A stretch of time with one app (and, in Orion, one site) in front.
@@ -57,6 +68,8 @@ struct Settings: Codable {
     /// Minutes between "still on task?" check-ins during a session; 0 turns them off.
     var checkinMinutes = 10
     var checkinSound = false
+    /// Length of the break that follows a session; 0 turns breaks off.
+    var breakMinutes = 5
 
     /// The blocklist entry that covers this host, if any ("m.youtube.com" matches "youtube.com").
     func blockedEntry(forHost host: String) -> String? {
@@ -78,6 +91,7 @@ extension Settings {
         passMinutes = try c.decodeIfPresent(Int.self, forKey: .passMinutes) ?? passMinutes
         checkinMinutes = try c.decodeIfPresent(Int.self, forKey: .checkinMinutes) ?? checkinMinutes
         checkinSound = try c.decodeIfPresent(Bool.self, forKey: .checkinSound) ?? checkinSound
+        breakMinutes = try c.decodeIfPresent(Int.self, forKey: .breakMinutes) ?? breakMinutes
     }
 }
 
@@ -132,6 +146,8 @@ final class Store: ObservableObject {
 
     @Published var data = AppData()
     @Published var now = Date()
+    /// When the current break ends; nil when no break is running. Not saved.
+    @Published var breakEnds: Date?
     private var dirty = false
 
     static let defaultFileURL: URL = {
@@ -153,10 +169,20 @@ final class Store: ObservableObject {
            let decoded = try? JSONDecoder().decode(AppData.self, from: raw) {
             data = decoded
         }
-        // A session left open by a quit or crash is closed at its planned end.
+        // A session left open by a quit or crash carries on if it still has time left (or was
+        // paused within the last hour). Otherwise it is closed where it would have ended.
+        let launch = Date()
         for i in data.sessions.indices where data.sessions[i].end == nil {
             let s = data.sessions[i]
-            data.sessions[i].end = min(Date(), s.start.addingTimeInterval(Double(s.plannedMinutes) * 60))
+            if let pausedAt = s.pausedAt {
+                if launch.timeIntervalSince(pausedAt) > 3600 {
+                    data.sessions[i].end = pausedAt
+                    data.sessions[i].pausedAt = nil
+                }
+            } else {
+                let plannedEnd = s.start.addingTimeInterval(Double(s.plannedMinutes) * 60 + (s.pausedTotal ?? 0))
+                if plannedEnd <= launch { data.sessions[i].end = plannedEnd }
+            }
         }
         let cutoff = Date().addingTimeInterval(-60 * 86400)
         data.segments.removeAll { $0.end < cutoff }
@@ -200,6 +226,16 @@ final class Store: ObservableObject {
         if moved > 0 { save() }
     }
 
+    func renameTask(_ id: UUID, to title: String) {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, let i = data.tasks.firstIndex(where: { $0.id == id }) else { return }
+        data.tasks[i].title = t
+        for j in data.sessions.indices where data.sessions[j].taskID == id {
+            data.sessions[j].title = t
+        }
+        save()
+    }
+
     func toggleDone(_ id: UUID) {
         guard let i = data.tasks.firstIndex(where: { $0.id == id }) else { return }
         data.tasks[i].done.toggle()
@@ -215,12 +251,32 @@ final class Store: ObservableObject {
 
     var activeSession: Session? { data.sessions.first { $0.end == nil } }
 
+    /// The active session, unless it is paused. Friction, check-ins and focus time follow this.
+    var runningSession: Session? { activeSession.flatMap { $0.isPaused ? nil : $0 } }
+
     func remaining(_ s: Session) -> TimeInterval {
-        s.start.addingTimeInterval(Double(s.plannedMinutes) * 60).timeIntervalSince(now)
+        Double(s.plannedMinutes) * 60 - s.activeSeconds(now: now)
+    }
+
+    func togglePause() {
+        guard let i = data.sessions.firstIndex(where: { $0.end == nil }) else { return }
+        if let pausedAt = data.sessions[i].pausedAt {
+            data.sessions[i].pausedTotal = (data.sessions[i].pausedTotal ?? 0) + Date().timeIntervalSince(pausedAt)
+            data.sessions[i].pausedAt = nil
+        } else {
+            data.sessions[i].pausedAt = Date()
+        }
+        save()
+    }
+
+    func startBreak() {
+        let minutes = data.settings.breakMinutes
+        breakEnds = minutes > 0 ? Date().addingTimeInterval(Double(minutes) * 60) : nil
     }
 
     func startSession(_ task: TaskItem) {
         guard activeSession == nil else { return }
+        breakEnds = nil
         data.sessions.append(Session(taskID: task.id, title: task.title, start: Date(),
                                      plannedMinutes: data.settings.sessionMinutes))
         save()
@@ -229,7 +285,12 @@ final class Store: ObservableObject {
     @discardableResult
     func endActiveSession() -> Session? {
         guard let i = data.sessions.firstIndex(where: { $0.end == nil }) else { return nil }
-        data.sessions[i].end = Date()
+        let end = Date()
+        if let pausedAt = data.sessions[i].pausedAt {
+            data.sessions[i].pausedTotal = (data.sessions[i].pausedTotal ?? 0) + end.timeIntervalSince(pausedAt)
+            data.sessions[i].pausedAt = nil
+        }
+        data.sessions[i].end = end
         save()
         return data.sessions[i]
     }
@@ -246,7 +307,7 @@ final class Store: ObservableObject {
     // Tracking
 
     func record(app: String, bundleID: String, host: String?, distracting: Bool) {
-        let sid = activeSession?.id
+        let sid = runningSession?.id
         let t = Date()
         if let last = data.segments.last, last.bundleID == bundleID, last.host == host,
            last.sessionID == sid, t.timeIntervalSince(last.end) < 10 {
