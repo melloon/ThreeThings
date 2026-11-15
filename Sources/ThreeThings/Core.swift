@@ -54,11 +54,30 @@ struct Settings: Codable {
     var sessionMinutes = 25
     var frictionSeconds = 20
     var passMinutes = 5
+    /// Minutes between "still on task?" check-ins during a session; 0 turns them off.
+    var checkinMinutes = 10
+    var checkinSound = false
 
     /// The blocklist entry that covers this host, if any ("m.youtube.com" matches "youtube.com").
     func blockedEntry(forHost host: String) -> String? {
         let h = host.lowercased()
         return blockedHosts.first { h == $0 || h.hasSuffix("." + $0) }
+    }
+}
+
+extension Settings {
+    /// Reads whatever settings a saved file has and keeps the defaults for the rest, so a file
+    /// written before a setting existed still loads.
+    init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        blockedHosts = try c.decodeIfPresent([String].self, forKey: .blockedHosts) ?? blockedHosts
+        blockedApps = try c.decodeIfPresent([String].self, forKey: .blockedApps) ?? blockedApps
+        sessionMinutes = try c.decodeIfPresent(Int.self, forKey: .sessionMinutes) ?? sessionMinutes
+        frictionSeconds = try c.decodeIfPresent(Int.self, forKey: .frictionSeconds) ?? frictionSeconds
+        passMinutes = try c.decodeIfPresent(Int.self, forKey: .passMinutes) ?? passMinutes
+        checkinMinutes = try c.decodeIfPresent(Int.self, forKey: .checkinMinutes) ?? checkinMinutes
+        checkinSound = try c.decodeIfPresent(Bool.self, forKey: .checkinSound) ?? checkinSound
     }
 }
 
@@ -72,10 +91,25 @@ struct AppData: Codable {
 
 // MARK: - Helpers
 
-func dayKey(_ date: Date) -> String {
+private let dayFormatter: DateFormatter = {
     let f = DateFormatter()
     f.dateFormat = "yyyy-MM-dd"
-    return f.string(from: date)
+    return f
+}()
+
+func dayKey(_ date: Date) -> String {
+    dayFormatter.string(from: date)
+}
+
+/// One day's totals, for the weekly view.
+struct DaySummary: Identifiable {
+    let date: Date
+    var focus: TimeInterval = 0
+    var distracted: TimeInterval = 0
+    var sessions = 0
+    var sessionsDone = 0
+
+    var id: String { dayKey(date) }
 }
 
 func clock(_ seconds: TimeInterval) -> String {
@@ -127,6 +161,7 @@ final class Store: ObservableObject {
         let cutoff = Date().addingTimeInterval(-60 * 86400)
         data.segments.removeAll { $0.end < cutoff }
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        carryOverTasks()
     }
 
     func save() {
@@ -148,6 +183,21 @@ final class Store: ObservableObject {
         guard !t.isEmpty, todayTasks.count < Self.maxTasksPerDay else { return }
         data.tasks.append(TaskItem(title: t, day: dayKey(now)))
         save()
+    }
+
+    /// Moves unfinished tasks from the most recent earlier day to today. Runs only while today
+    /// has no tasks of its own, so it never adds to a list the user has already started.
+    func carryOverTasks() {
+        let today = dayKey(now)
+        guard !data.tasks.contains(where: { $0.day == today }),
+              let lastDay = data.tasks.map(\.day).filter({ $0 < today }).max() else { return }
+        var moved = 0
+        for i in data.tasks.indices
+        where data.tasks[i].day == lastDay && !data.tasks[i].done && moved < Self.maxTasksPerDay {
+            data.tasks[i].day = today
+            moved += 1
+        }
+        if moved > 0 { save() }
     }
 
     func toggleDone(_ id: UUID) {
@@ -207,6 +257,26 @@ final class Store: ObservableObject {
                                          distracting: distracting))
         }
         dirty = true
+    }
+
+    /// Totals for each of the seven days ending on `date`, oldest first.
+    func weekSummaries(endingOn date: Date, calendar: Calendar = .current) -> [DaySummary] {
+        let end = calendar.startOfDay(for: date)
+        var days = (0..<7).reversed().compactMap { calendar.date(byAdding: .day, value: -$0, to: end) }
+            .map { DaySummary(date: $0) }
+        let index = Dictionary(uniqueKeysWithValues: days.enumerated().map { ($1.id, $0) })
+
+        for segment in data.segments {
+            guard let i = index[dayKey(segment.start)] else { continue }
+            if segment.sessionID != nil { days[i].focus += segment.seconds }
+            if segment.distracting { days[i].distracted += segment.seconds }
+        }
+        for session in data.sessions {
+            guard let i = index[dayKey(session.start)] else { continue }
+            days[i].sessions += 1
+            if session.outcome == "done" { days[i].sessionsDone += 1 }
+        }
+        return days
     }
 
     func addOverride(target: String, reason: String, task: String) {

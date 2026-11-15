@@ -80,6 +80,70 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(store.todayTasks.first).done)
     }
 
+    func testUnfinishedTasksCarryOverToToday() {
+        let store = makeStore()
+        let yesterday = dayKey(Date().addingTimeInterval(-86400))
+        let lastWeek = dayKey(Date().addingTimeInterval(-7 * 86400))
+        store.data.tasks = [
+            TaskItem(title: "old", day: lastWeek),
+            TaskItem(title: "finished", day: yesterday, done: true),
+            TaskItem(title: "unfinished", day: yesterday),
+        ]
+        store.carryOverTasks()
+
+        XCTAssertEqual(store.todayTasks.map(\.title), ["unfinished"])
+        XCTAssertEqual(store.data.tasks.first { $0.title == "finished" }?.day, yesterday)
+        XCTAssertEqual(store.data.tasks.first { $0.title == "old" }?.day, lastWeek,
+                       "only the most recent day carries over")
+    }
+
+    func testCarryOverLeavesAStartedDayAlone() {
+        let store = makeStore()
+        store.addTask("today's own task")
+        store.data.tasks.append(TaskItem(title: "unfinished", day: dayKey(Date().addingTimeInterval(-86400))))
+        store.carryOverTasks()
+        XCTAssertEqual(store.todayTasks.map(\.title), ["today's own task"])
+    }
+
+    // MARK: Weekly totals
+
+    func testWeekSummariesTotalEachDay() {
+        let store = makeStore()
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date()).addingTimeInterval(9 * 3600)
+        let twoDaysAgo = calendar.date(byAdding: .day, value: -2, to: today)!
+        let eightDaysAgo = calendar.date(byAdding: .day, value: -8, to: today)!
+        let sessionID = UUID()
+
+        func segment(_ start: Date, minutes: Double, session: UUID? = nil, distracting: Bool = false) -> Segment {
+            Segment(start: start, end: start.addingTimeInterval(minutes * 60), app: "App", bundleID: "app",
+                    host: nil, sessionID: session, distracting: distracting)
+        }
+        store.data.segments = [
+            segment(twoDaysAgo, minutes: 25, session: sessionID),
+            segment(twoDaysAgo.addingTimeInterval(3600), minutes: 10, distracting: true),
+            segment(today, minutes: 5, session: sessionID, distracting: true),
+            segment(eightDaysAgo, minutes: 30, distracting: true),
+        ]
+        store.data.sessions = [
+            Session(taskID: UUID(), title: "a", start: twoDaysAgo, end: twoDaysAgo.addingTimeInterval(1500),
+                    plannedMinutes: 25, outcome: "done"),
+            Session(taskID: UUID(), title: "b", start: twoDaysAgo.addingTimeInterval(7200),
+                    end: twoDaysAgo.addingTimeInterval(8700), plannedMinutes: 25, outcome: "partial"),
+        ]
+
+        let days = store.weekSummaries(endingOn: Date())
+        XCTAssertEqual(days.count, 7)
+        XCTAssertEqual(days.last?.id, dayKey(Date()), "the last day is today")
+        XCTAssertEqual(days[4].focus, 25 * 60)
+        XCTAssertEqual(days[4].distracted, 10 * 60)
+        XCTAssertEqual(days[4].sessions, 2)
+        XCTAssertEqual(days[4].sessionsDone, 1)
+        XCTAssertEqual(days[6].focus, 5 * 60)
+        XCTAssertEqual(days[6].distracted, 5 * 60)
+        XCTAssertEqual(days.reduce(0) { $0 + $1.distracted }, 15 * 60, "older time is excluded")
+    }
+
     // MARK: Tracking
 
     func testRecordMergesSameActivityAndSplitsOnChange() {
@@ -117,6 +181,30 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(reloaded.todayTasks.map(\.title), ["Persist me"])
         XCTAssertTrue(reloaded.data.settings.blockedHosts.contains("example.org"))
         XCTAssertEqual(reloaded.data.overrides.first?.reason, "tutorial")
+    }
+
+    func testFileSavedBeforeASettingExistedStillLoads() throws {
+        // A file from before check-ins were added: no checkinMinutes or checkinSound.
+        let old = """
+        {"tasks":[{"id":"\(UUID().uuidString)","title":"Kept","day":"\(dayKey(Date()))","done":false}],
+         "sessions":[],"segments":[],"overrides":[],
+         "settings":{"blockedHosts":["example.com"],"blockedApps":[],"sessionMinutes":45,
+                     "frictionSeconds":20,"passMinutes":5}}
+        """
+        try Data(old.utf8).write(to: fileURL)
+
+        let store = makeStore()
+        XCTAssertEqual(store.todayTasks.map(\.title), ["Kept"])
+        XCTAssertEqual(store.data.settings.sessionMinutes, 45)
+        XCTAssertEqual(store.data.settings.blockedHosts, ["example.com"])
+        XCTAssertEqual(store.data.settings.checkinMinutes, Settings().checkinMinutes)
+    }
+
+    func testCheckinsDue() {
+        XCTAssertEqual(Tracker.checkinsDue(elapsed: 9 * 60 + 59, everyMinutes: 10), 0)
+        XCTAssertEqual(Tracker.checkinsDue(elapsed: 10 * 60, everyMinutes: 10), 1)
+        XCTAssertEqual(Tracker.checkinsDue(elapsed: 24 * 60, everyMinutes: 10), 2)
+        XCTAssertEqual(Tracker.checkinsDue(elapsed: 24 * 60, everyMinutes: 0), 0, "0 turns check-ins off")
     }
 
     func testSessionLeftOpenIsClosedOnLoad() throws {

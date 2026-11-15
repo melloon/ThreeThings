@@ -1,5 +1,35 @@
 import AppKit
+import Charts
+import ServiceManagement
 import SwiftUI
+
+/// Fixed chart colours, one per kind of time, so they never depend on the system accent colour.
+/// Each has a light and a dark step, checked for contrast and colour-blind separation.
+enum ChartColor {
+    static let activity = dynamic(light: 0x2A78D6, dark: 0x3987E5)
+    static let distraction = dynamic(light: 0xEB6834, dark: 0xD95926)
+    static let focus = dynamic(light: 0x1BAF7A, dark: 0x199E70)
+
+    private static func dynamic(light: UInt32, dark: UInt32) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let hex = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
+                           blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+        })
+    }
+}
+
+/// A small colour swatch with its meaning, for chart legends.
+struct LegendItem: View {
+    let color: Color
+    let label: String
+    var body: some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 10, height: 10)
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -180,6 +210,7 @@ struct TodayView: View {
     var body: some View {
         TabView {
             DayView().tabItem { Text("Day") }
+            WeekView().tabItem { Text("Week") }
             SettingsView().tabItem { Text("Settings") }
         }
         .padding(16)
@@ -258,7 +289,12 @@ struct DayView: View {
                     }
                 }
 
-                Text("Where the time went").font(.headline)
+                HStack(spacing: 14) {
+                    Text("Where the time went").font(.headline)
+                    Spacer()
+                    LegendItem(color: ChartColor.activity, label: "Work and neutral")
+                    LegendItem(color: ChartColor.distraction, label: "Distracting")
+                }
                 if usage.isEmpty {
                     Text("Nothing tracked yet.").foregroundStyle(.secondary)
                 }
@@ -266,8 +302,8 @@ struct DayView: View {
                     let blocked = store.isBlocked(host: row.host, bundleID: row.bundleID)
                     HStack {
                         Text(row.label).lineLimit(1).frame(width: 190, alignment: .leading)
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(blocked ? Color.orange : Color.accentColor)
+                        UnevenRoundedRectangle(bottomTrailingRadius: 4, topTrailingRadius: 4)
+                            .fill(blocked ? ChartColor.distraction : ChartColor.activity)
                             .frame(width: max(2, 170 * row.seconds / top), height: 8)
                             .frame(width: 170, alignment: .leading)
                         Text(duration(row.seconds))
@@ -325,15 +361,163 @@ struct Stat: View {
     }
 }
 
+// MARK: - Week
+
+struct WeekView: View {
+    @EnvironmentObject var store: Store
+    @State private var weekOffset = 0
+
+    private static let focusLabel = "In focus sessions"
+    private static let distractionLabel = "On distractions"
+
+    private var anchor: Date {
+        Calendar.current.date(byAdding: .day, value: weekOffset * 7, to: store.now) ?? store.now
+    }
+
+    var body: some View {
+        let days = store.weekSummaries(endingOn: anchor)
+        let focus = days.reduce(0) { $0 + $1.focus }
+        let distracted = days.reduce(0) { $0 + $1.distracted }
+        let sessions = days.reduce(0) { $0 + $1.sessions }
+        let done = days.reduce(0) { $0 + $1.sessionsDone }
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    Button { weekOffset -= 1 } label: { Image(systemName: "chevron.left") }
+                        .help("Previous 7 days")
+                    Text(title(days)).font(.title2.bold())
+                    Button { weekOffset += 1 } label: { Image(systemName: "chevron.right") }
+                        .help("Next 7 days")
+                        .disabled(weekOffset >= 0)
+                    Spacer()
+                }
+
+                HStack(spacing: 12) {
+                    Stat(title: "In focus sessions", value: duration(focus))
+                    Stat(title: "On distractions", value: duration(distracted))
+                    Stat(title: "Sessions marked done", value: "\(done) of \(sessions)")
+                }
+
+                Text("Focus and distraction by day").font(.headline)
+                if focus + distracted == 0 {
+                    Text("Nothing tracked in these 7 days.").foregroundStyle(.secondary)
+                } else {
+                    chart(days)
+                }
+
+                Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
+                    GridRow {
+                        Text("Day")
+                        Text("Focus").gridColumnAlignment(.trailing)
+                        Text("Distractions").gridColumnAlignment(.trailing)
+                        Text("Sessions done").gridColumnAlignment(.trailing)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    ForEach(days) { day in
+                        GridRow {
+                            Text(day.date.formatted(.dateTime.weekday(.wide).day().month(.abbreviated)))
+                            Text(day.focus > 0 ? duration(day.focus) : "–")
+                            Text(day.distracted > 0 ? duration(day.distracted) : "–")
+                            Text(day.sessions > 0 ? "\(day.sessionsDone) of \(day.sessions)" : "–")
+                        }
+                        .monospacedDigit()
+                    }
+                }
+            }
+            .padding(8)
+        }
+    }
+
+    /// Two bars per day on one shared time axis: focus session time and distraction time.
+    private func chart(_ days: [DaySummary]) -> some View {
+        // Round the time axis to whole steps that suit the tallest bar.
+        let tallest = (days.map { max($0.focus, $0.distracted) }.max() ?? 0) / 60
+        let step: Double = tallest <= 60 ? 15 : tallest <= 180 ? 30 : tallest <= 480 ? 60 : 120
+        let top = max(step, (tallest / step).rounded(.up) * step)
+        let ticks = Array(stride(from: 0, through: top, by: step))
+
+        return Chart {
+            ForEach(days) { day in
+                let weekday = day.date.formatted(.dateTime.weekday(.abbreviated))
+                BarMark(x: .value("Day", weekday), y: .value("Minutes", day.focus / 60), width: .fixed(18))
+                    .foregroundStyle(by: .value("Kind", Self.focusLabel))
+                    .position(by: .value("Kind", Self.focusLabel), axis: .horizontal, span: .fixed(40))
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 4, topTrailingRadius: 4))
+                BarMark(x: .value("Day", weekday), y: .value("Minutes", day.distracted / 60), width: .fixed(18))
+                    .foregroundStyle(by: .value("Kind", Self.distractionLabel))
+                    .position(by: .value("Kind", Self.distractionLabel), axis: .horizontal, span: .fixed(40))
+                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: 4, topTrailingRadius: 4))
+            }
+        }
+        .chartForegroundStyleScale([
+            Self.focusLabel: ChartColor.focus,
+            Self.distractionLabel: ChartColor.distraction,
+        ])
+        .chartLegend(position: .top, alignment: .leading, spacing: 14)
+        .chartYScale(domain: 0...top)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: ticks) { value in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let minutes = value.as(Double.self) { Text(Self.axisLabel(minutes)) }
+                }
+            }
+        }
+        .chartXAxis {
+            AxisMarks { _ in AxisValueLabel() }
+        }
+        .frame(height: 220)
+    }
+
+    private static func axisLabel(_ minutes: Double) -> String {
+        let m = Int(minutes)
+        if m == 0 { return "0" }
+        if m % 60 == 0 { return "\(m / 60)h" }
+        return m < 60 ? "\(m)m" : "\(m / 60)h \(m % 60)m"
+    }
+
+    private func title(_ days: [DaySummary]) -> String {
+        if weekOffset == 0 { return "Last 7 days" }
+        guard let first = days.first?.date, let last = days.last?.date else { return "" }
+        let style = Date.FormatStyle.dateTime.day().month(.abbreviated)
+        return "\(first.formatted(style)) to \(last.formatted(style))"
+    }
+}
+
 // MARK: - Settings
 
 struct SettingsView: View {
     @EnvironmentObject var store: Store
     @State private var newHost = ""
+    @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var loginError: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                Text("General").font(.headline)
+                Toggle("Open ThreeThings at login", isOn: Binding(
+                    get: { openAtLogin },
+                    set: { enable in
+                        do {
+                            if enable {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                            loginError = nil
+                        } catch {
+                            loginError = error.localizedDescription
+                        }
+                        openAtLogin = SMAppService.mainApp.status == .enabled
+                    }))
+                if let loginError {
+                    Text("Couldn't change the login setting: \(loginError)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 Text("Sessions").font(.headline)
                 Stepper("Session length: \(store.data.settings.sessionMinutes) min",
                         value: $store.data.settings.sessionMinutes, in: 5...120, step: 5)
@@ -341,6 +525,16 @@ struct SettingsView: View {
                         value: $store.data.settings.frictionSeconds, in: 5...120, step: 5)
                 Stepper("Pass after pushing through: \(store.data.settings.passMinutes) min",
                         value: $store.data.settings.passMinutes, in: 1...30)
+
+                Text("Check-ins").font(.headline)
+                Stepper(store.data.settings.checkinMinutes > 0
+                        ? "Ask “still on task?” every \(store.data.settings.checkinMinutes) min of a session"
+                        : "Check-ins are off",
+                        value: $store.data.settings.checkinMinutes, in: 0...60, step: 5)
+                Toggle("Play a sound with check-ins", isOn: $store.data.settings.checkinSound)
+                    .disabled(store.data.settings.checkinMinutes == 0)
+                Text("Check-ins arrive as notifications. macOS asks for permission when your next session starts, and hides them while a Focus mode such as Do Not Disturb is on.")
+                    .font(.caption).foregroundStyle(.secondary)
 
                 Text("Distracting sites").font(.headline)
                 ForEach(store.data.settings.blockedHosts, id: \.self) { host in
@@ -382,6 +576,8 @@ struct SettingsView: View {
             .onChange(of: store.data.settings.sessionMinutes) { store.save() }
             .onChange(of: store.data.settings.frictionSeconds) { store.save() }
             .onChange(of: store.data.settings.passMinutes) { store.save() }
+            .onChange(of: store.data.settings.checkinMinutes) { store.save() }
+            .onChange(of: store.data.settings.checkinSound) { store.save() }
         }
     }
 

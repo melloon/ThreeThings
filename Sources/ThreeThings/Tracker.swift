@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import UserNotifications
 
 // MARK: - Browser scripting
 
@@ -17,6 +18,13 @@ struct Browser {
         Browser(bundleID: "com.kagi.kagimacOS", tabName: "current tab", chromium: false),
         Browser(bundleID: "com.google.Chrome", tabName: "active tab", chromium: true),
         Browser(bundleID: "com.brave.Browser", tabName: "active tab", chromium: true),
+        Browser(bundleID: "com.apple.Safari", tabName: "current tab", chromium: false),
+        // Browsers that ship the standard Chromium scripting dictionary.
+        Browser(bundleID: "com.microsoft.edgemac", tabName: "active tab", chromium: true),
+        Browser(bundleID: "com.vivaldi.Vivaldi", tabName: "active tab", chromium: true),
+        Browser(bundleID: "com.operasoftware.Opera", tabName: "active tab", chromium: true),
+        Browser(bundleID: "org.chromium.Chromium", tabName: "active tab", chromium: true),
+        Browser(bundleID: "company.thebrowser.Browser", tabName: "active tab", chromium: true),
     ]
 
     static func find(_ bundleID: String) -> Browser? {
@@ -82,20 +90,24 @@ struct Browser {
 
     /// Goes back one page, or closes the tab when there is nothing to go back to.
     func leavePage() {
+        let before = currentURL()
+        var closing = false
         if chromium {
             // Chromium's "go back" does nothing on a fresh tab, so compare the address after.
-            let before = currentURL()
             _ = run(tell + "go back (\(tab))")
             Thread.sleep(forTimeInterval: 0.8)
-            if currentURL() == before {
-                _ = run(tell + "close \(tab)")
-            }
+            closing = currentURL() == before
         } else {
+            // Safari only runs this with "Allow JavaScript from Apple Events" turned on.
             let js = "history.length > 1 ? (history.back(), 'back') : 'close'"
-            let result = run(tell + "do JavaScript \"\(js)\" in \(tab)")
-            if result != "back" {
-                _ = run(tell + "close \(tab)")
-            }
+            closing = run(tell + "do JavaScript \"\(js)\" in \(tab)") != "back"
+        }
+        guard closing else { return }
+        _ = run(tell + "close \(tab)")
+        // Last resort for a browser that refuses both, so the friction screen cannot loop.
+        Thread.sleep(forTimeInterval: 0.3)
+        if let before, currentURL() == before {
+            _ = run(tell + "set URL of \(tab) to \"about:blank\"")
         }
     }
 }
@@ -119,8 +131,35 @@ final class Tracker {
         timer = t
     }
 
+    /// How many check-ins should have fired this far into a session.
+    static func checkinsDue(elapsed: TimeInterval, everyMinutes: Int) -> Int {
+        everyMinutes > 0 ? Int(elapsed / Double(everyMinutes * 60)) : 0
+    }
+
+    private var checkinSession: UUID?
+    private var checkinsSent = 0
+
+    private func checkIn(_ session: Session) {
+        let settings = store.data.settings
+        guard settings.checkinMinutes > 0 else { return }
+        if checkinSession != session.id {
+            checkinSession = session.id
+            checkinsSent = 0
+            Checkins.shared.prepare()
+        }
+        let due = Tracker.checkinsDue(elapsed: store.now.timeIntervalSince(session.start),
+                                      everyMinutes: settings.checkinMinutes)
+        guard due > checkinsSent else { return }
+        checkinsSent = due
+        // Not while the friction screen is up, and not in the last two minutes.
+        let remaining = store.remaining(session)
+        guard remaining > 120, !Overlay.shared.isVisible else { return }
+        Checkins.shared.post(task: session.title, remaining: remaining, sound: settings.checkinSound)
+    }
+
     func finishSession() {
         guard let session = store.endActiveSession() else { return }
+        Checkins.shared.clear()
         passes.removeAll()
         nudged.removeAll()
         Overlay.shared.showCheckin(session)
@@ -129,9 +168,13 @@ final class Tracker {
     private func tick() {
         store.now = Date()
         if let s = store.activeSession, store.remaining(s) <= 0 { finishSession() }
+        if let s = store.activeSession { checkIn(s) }
 
         ticks += 1
-        if ticks % 30 == 0 { store.saveIfDirty() }
+        if ticks % 30 == 0 {
+            store.saveIfDirty()
+            store.carryOverTasks()
+        }
         guard ticks % 2 == 0, !Overlay.shared.isVisible else { return }
 
         // No keyboard or mouse input for two minutes counts as away.
@@ -207,6 +250,48 @@ final class Tracker {
                 Overlay.shared.close()
                 app.activate()
             }))
+    }
+}
+
+// MARK: - Check-in notifications
+
+/// Posts the "still on task?" check-in as a system notification: a banner that slides in and
+/// leaves on its own. Falls back to the in-app heads-up message when notifications are not allowed.
+final class Checkins: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = Checkins()
+    private static let identifier = "checkin"
+    private var center: UNUserNotificationCenter { .current() }
+
+    /// Asks for permission the first time; later calls do nothing visible.
+    func prepare() {
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    func post(task: String, remaining: TimeInterval, sound: Bool) {
+        let title = "Still on “\(task)”?"
+        center.getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+                DispatchQueue.main.async { HUD.shared.show(title) }
+                return
+            }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = "\(Int((remaining / 60).rounded())) min left in this session."
+            content.sound = sound ? .default : nil
+            // Reusing one identifier replaces the previous check-in, so they never pile up.
+            self.center.add(UNNotificationRequest(identifier: Checkins.identifier, content: content, trigger: nil))
+        }
+    }
+
+    func clear() {
+        center.removeDeliveredNotifications(withIdentifiers: [Checkins.identifier])
+    }
+
+    /// Show the banner even when ThreeThings itself is the active app.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 }
 
